@@ -42,21 +42,19 @@ class GeneratorBlock(nn.Module):
             self.upsample = nn.Identity()
 
         self.conv1 = nn.Conv2d(input_channels, latent_channels, 3, 1, 1, padding_mode='replicate')
+        self.conv1.bias.data = torch.zeros(*self.conv1.bias.data.shape)
         self.act1 = leaky_relu()
-        self.norm1 = nn.InstanceNorm2d(latent_channels)
         self.conv2 = nn.Conv2d(latent_channels, output_channels, 3, 1, 1, padding_mode='replicate')
+        self.conv2.bias.data = torch.zeros(*self.conv2.bias.data.shape)
         self.act2 = leaky_relu()
-        self.norm2 = nn.InstanceNorm2d(output_channels)
         self.to_rgb = nn.Conv2d(output_channels, 3, 1, 1, 0)
 
     def forward(self, x):
         x = self.upsample(x)
         x = self.conv1(x)
         x = self.act1(x)
-        x = self.norm1(x)
         x = self.conv2(x)
         x = self.act2(x)
-        x = self.norm2(x)
         rgb = self.to_rgb(x)
         return x, rgb
 
@@ -66,11 +64,10 @@ class Generator(nn.Module):
         self.last_channels = initial_channels
         self.layers = nn.ModuleList([])
         self.alpha = 0
-        self.tanh = nn.Tanh()
         self.blur = Blur()
-        self.fc = nn.Sequential(*[nn.Sequential(nn.Linear(initial_channels, initial_channels), leaky_relu()) for _ in range(4)])
         self.latent2pic = nn.Linear(initial_channels, initial_channels * 4 * 4)
         self.upsample = nn.Upsample(scale_factor=2)
+        self.tanh = nn.Tanh()
         
         self.add_layer(initial_channels,  False)
 
@@ -82,8 +79,6 @@ class Generator(nn.Module):
         x = x.reshape(x.shape[0], -1, 4, 4)
         for i in range(len(self.layers)):
             x, rgb = self.layers[i](x)
-            if i == num_layers - 1: # last layer
-                rgb = rgb * self.alpha
             if rgb_out == None:
                 rgb_out = rgb
             else:
@@ -108,7 +103,7 @@ class DiscriminatorBlock(nn.Module):
         self.act2 = leaky_relu()
         self.res = nn.Conv2d(input_channels, output_channels, 1, 1, 0)
         if downsample:
-            self.downsample = nn.AvgPool2d(kernel_size=2)
+            self.downsample = nn.Conv2d(output_channels, output_channels, 2, 2, 0)
         else:
             self.downsample = nn.Identity()
 
@@ -130,7 +125,6 @@ class Discriminator(nn.Module):
         self.fc1 = nn.Linear(initial_channels+1, 64) 
         self.act1 = leaky_relu()
         self.fc2 = nn.Linear(64, 1)
-        self.pool4x = nn.AvgPool2d(kernel_size=4)
         self.downsample = nn.AvgPool2d(kernel_size=2)
         self.blur = Blur()
         self.alpha = 0
@@ -144,7 +138,7 @@ class Discriminator(nn.Module):
                 x = x * self.alpha + self.layers[1].from_rgb(self.downsample(self.blur(rgb))) * (1-self.alpha)
             x = self.layers[i](x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
-        x = self.pool4x(x)
+        x = x.mean(dim=[2,3])
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
         x = self.act1(x)
@@ -179,7 +173,8 @@ class GAN(nn.Module):
         if not os.path.exists(result_dir):
             os.mkdir(result_dir)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
-        optimizer = optim.Adam(self.parameters(), lr=lr)
+        optimizer_d = optim.Adam(self.discriminator.parameters(), lr=lr)
+        optimizer_g = optim.Adam(self.generator.parameters(), lr=lr)
         bar = tqdm(total=num_epoch)
         self.to(device)
         D = self.discriminator
@@ -199,8 +194,9 @@ class GAN(nn.Module):
                 G.zero_grad()
                 z = torch.randn(N, self.initial_channels, device=device)
                 fake = G(z)
-                generator_loss = - D(fake).mean()
+                generator_loss = -D(fake).mean()
                 generator_loss.backward()
+                optimizer_g.step()
 
                 # train disciriminator
                 D.zero_grad()
@@ -208,9 +204,8 @@ class GAN(nn.Module):
                 discriminator_loss_real = -torch.minimum(D(T(real)) - 1, torch.zeros(N, 1).to(device)).mean()
                 discriminator_loss = discriminator_loss_fake + discriminator_loss_real
                 discriminator_loss.backward()
+                optimizer_d.step()
 
-                # update parameters
-                optimizer.step()
                 bar.set_description(desc=f"Dloss: {discriminator_loss.item():.4f}, Gloss: {generator_loss.item():.4f} alpha: {alpha:.4f}")
 
             # write result
@@ -240,4 +235,3 @@ class GAN(nn.Module):
             self.generator.add_layer(ch)
             self.discriminator.add_layer(ch)
             self.to(device)
-
