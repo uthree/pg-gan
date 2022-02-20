@@ -4,7 +4,7 @@ import torch
 import os
 import sys
 
-ds = ImageDataset(sys.argv[1:], max_len=100000, background_resize=False)
+ds = ImageDataset(sys.argv[1:], max_len=5000, background_resize=False)
 if os.path.exists('model.pt'):
     model = torch.load('model.pt')
     print("Loaded model")

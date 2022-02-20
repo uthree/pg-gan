@@ -169,7 +169,7 @@ class GAN(nn.Module):
         self.generator = Generator(initial_channels)
         self.discriminator = Discriminator(initial_channels)
         
-    def train_resolution(self, dataset, num_epoch=1, batch_size=4, result_dir ='results/', model_path='model.pt', lr=1e-4, device=torch.device('cpu'), augmentation=nn.Identity()):
+    def train_resolution(self, dataset, num_epoch=1, batch_size=4, result_dir ='results/', model_path='model.pt', lr=1e-4, device=torch.device('cpu'), augmentation=nn.Identity(), smooth_growning=False):
         if not os.path.exists(result_dir):
             os.mkdir(result_dir)
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
@@ -183,7 +183,7 @@ class GAN(nn.Module):
         for epoch in range(num_epoch):
             for i, real in enumerate(dataloader):
                 alpha = epoch / num_epoch
-                if len(G.layers) == 1:
+                if len(G.layers) == 1 or (not smooth_growning):
                     alpha = 1
                 G.alpha = alpha
                 D.alpha = alpha
